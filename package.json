@@ -13,7 +13,7 @@
     "lodash": "^4.17.19",
     "morgan": "~1.9.1",
     "node-fetch": "^2.6.0",
-    "symbl-node": "^1.0.8-alpha.4",
+    "symbl-node": "^1.0.10",
     "uuid": "^8.3.0",
     "websocket": "^1.0.30",
     "winston": "^3.3.3"
