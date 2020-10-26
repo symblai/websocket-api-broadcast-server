@@ -1,0 +1,7 @@
+node_modules
+.scannerwork
+.idea
+.nvmrc
+.env
+*.iml
+.DS_Store
