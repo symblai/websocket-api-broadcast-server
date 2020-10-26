@@ -171,7 +171,16 @@ const RealTimeConnectionsHelper = class {
                     try {
                         const data = JSON.parse(message.utf8Data);
 
-                        const {type} = data;
+                        const {type, config: { apiMode } = {} } = data;
+
+                        if (!mode && !apiMode) {
+                            logger.debug(`'mode' must be provided in the payload inside 'config' or as a query param and must take one of the values from [listener, speaker]`);
+                            connection.send(getError(null, `'mode' must be provided in the payload inside 'config' or as a query param and must take one of the values from [listener, speaker]`));
+
+                            return;
+                        } else {
+                            this.getConnection(connectionId, connectionRefId).mode = mode || apiMode;
+                        }
 
                         if (type) {
                             if (type.toLowerCase() === 'start_request' || type.toLowerCase() === 'stop_request' || type.toLowerCase() === 'stop_recognition') {
@@ -179,7 +188,7 @@ const RealTimeConnectionsHelper = class {
                                 if (value && value.symblConnection) {
                                     if (type.toLowerCase() === 'start_request') {
                                         let response;
-                                        if (mode === 'speaker') {
+                                        if ((!!mode && mode === 'speaker') || (!!apiMode && apiMode === 'speaker')) {
                                             this.activeConnections[connectionId].connections[connectionRefId].speaker = await value.symblConnection.connect(data);
                                             response = JSON.stringify({
                                                 type: 'message',

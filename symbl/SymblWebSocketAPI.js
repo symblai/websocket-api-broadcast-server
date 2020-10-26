@@ -18,11 +18,10 @@ const appSecret = process.env.SYMBL_APP_SECRET || symbl.appSecret;
 });
 
 class SymblWebSocketAPI {
-    constructor(handlers = {}, connectionId, connectionRefId, mode) {
+    constructor(handlers = {}, connectionId, connectionRefId) {
         this.handlers = handlers;
         this.connectionId = connectionId;
         this.connectionRefId = connectionRefId;
-        this.mode = mode;
 
         this.onSpeechDetected = this.onSpeechDetected.bind(this);
         this.onMessageResponse = this.onMessageResponse.bind(this);
