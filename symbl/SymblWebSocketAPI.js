@@ -2,7 +2,7 @@ const logger = require('../winston');
 const config = require('../config');
 const { sdk } = require('symbl-node');
 
-const { symbl } = config;
+const { symbl, symblDeploymentBasePath } = config;
 
 const appId = process.env.SYMBL_APP_ID || symbl.appId;
 const appSecret = process.env.SYMBL_APP_SECRET || symbl.appSecret;
@@ -11,7 +11,7 @@ const appSecret = process.env.SYMBL_APP_SECRET || symbl.appSecret;
     return sdk.init({
         appId,
         appSecret,
-        basePath: 'https://api.symbl.ai'
+        basePath: symblDeploymentBasePath
     })
 })().catch((err) => {
     logger.error('Error while initializing client SDK: ' + err.message, {err});
