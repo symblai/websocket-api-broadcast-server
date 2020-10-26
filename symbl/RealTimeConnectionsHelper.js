@@ -8,11 +8,11 @@ const getError = (err, message) => {
     if (err && err instanceof Error) {
         details = err.message || details;
     }
-    return {
+    return JSON.stringify({
         type: 'error',
         details,
         message: message || 'Unhandled error occurred. Please contact us at support@rammer.ai to report this issue.'
-    }
+    });
 };
 
 const RealTimeConnectionsHelper = class {
@@ -26,33 +26,37 @@ const RealTimeConnectionsHelper = class {
             this.activeConnections[connectionId].connections = {};
         }
 
-        this.activeConnections[connectionId].connections[connectionRefId] = { appConnection, symblConnection };
+        this.activeConnections[connectionId].connections[connectionRefId] = {appConnection, symblConnection};
     }
 
     removeConnection(connectionId, connectionRefId) {
         if (this.activeConnections[connectionId] && this.activeConnections[connectionId].connections[connectionRefId]) {
             delete this.activeConnections[connectionId].connections[connectionRefId];
+            if (Object.keys(this.activeConnections[connectionId].connections).length <= 0) {
+                logger.debug("Clearing cache for connectionId: " + connectionId);
+                delete this.activeConnections[connectionId];
+            }
         } else {
             logger.error(`No connection found with ${connectionId} and ${connectionRefId}`);
         }
     }
 
     getConnection(connectionId, connectionRefId) {
-        if (connectionId) {
-            if (connectionRefId) {
+        if (connectionId && this.activeConnections[connectionId]) {
+            if (connectionRefId && this.activeConnections[connectionId].connections[connectionRefId]) {
                 return this.activeConnections[connectionId].connections[connectionRefId];
             }
 
             return this.activeConnections[connectionId];
         }
-        logger.error('No connection id', this.activeConnections);
+        logger.warning('Connection ID: ' + connectionId + ' not active anymore', {connectionId, connectionRefId});
         return {};
     }
 
     async sendDataOnConnections(connectionId, data) {
         if (!!this.activeConnections[connectionId]) {
             Object.values(this.activeConnections[connectionId].connections).forEach(connection => {
-                connection.appConnection.send(JSON.stringify(data));
+                connection.appConnection.sendUTF(JSON.stringify(data));
             });
         } else {
             logger.warning('Trying to send data on a closed/unestablished connection', {connectionId});
@@ -75,8 +79,8 @@ const RealTimeConnectionsHelper = class {
     }
 
     getModeFromRequest(request) {
-        const { mode } = request.resourceURL.query;
-        logger.debug('Mode: ' + mode);
+        const {mode} = request.resourceURL.query;
+        logger.debug('Mode (Query-Param): ' + mode);
 
         if (mode !== undefined && mode !== 'listener' && mode !== 'speaker') {
             return '';
@@ -91,31 +95,21 @@ const RealTimeConnectionsHelper = class {
 
         logger.debug('ConnectionID: ' + connectionId);
 
-        if (!mode) {
-            const errorString = `No valid mode passed in the query-params. Please pass in the mode query-param which can take on of [listener, speaker]`;
-            logger.error(errorString);
-            request.reject(400, errorString);
-
-            return;
-        }
-
         if (connectionId) {
             const connectionRefId = uuid();
             const appConnection = request.accept(request.origin);
-            let symblWebSocketConnection = {};
+            let symblWebSocketConnection;
 
-            if (mode === 'speaker') {
-                symblWebSocketConnection = new SymblWebSocketAPI({
-                    'onSpeechDetected': this.getOnSpeechDetected(connectionId, connectionRefId, mode),
-                    'onMessageResponse': this.getOnMessageData(connectionId, connectionRefId, mode),
-                    'onInsightDetected': this.getOnInsightsData(connectionId, connectionRefId, mode),
-                }, connectionId, connectionRefId, mode);
-            }
+            symblWebSocketConnection = new SymblWebSocketAPI({
+                'onSpeechDetected': this.getOnSpeechDetected(connectionId, connectionRefId, mode),
+                'onMessageResponse': this.getOnMessageData(connectionId, connectionRefId, mode),
+                'onInsightResponse': this.getOnInsightsData(connectionId, connectionRefId, mode)
+            }, connectionId, connectionRefId, mode);
 
             this.addConnection(appConnection, symblWebSocketConnection, connectionId, connectionRefId);
 
-            this.bindConnection(appConnection, connectionId, connectionRefId, { ...options, mode });
-            logger.info('Connection added and bound');
+            this.bindConnection(appConnection, connectionId, connectionRefId, {...options, mode});
+            logger.info(`[${connectionId}] Connection added and bound`);
         } else {
             logger.notice('No connectionId found in the path.. Rejecting the request');
             request.reject();
@@ -157,80 +151,115 @@ const RealTimeConnectionsHelper = class {
     }
 
     getOnMessage(connection, connectionId, connectionRefId, options) {
-        const { mode } = options;
+        const {mode} = options;
         return async (message) => {
             if (message.type === 'binary') {
                 const value = this.getConnection(connectionId, connectionRefId);
                 if (value && value.symblConnection && !value.listener) {
                     await value.symblConnection.sendAudio(message.binaryData);
-                } else if(!value.listener) {
+                } else if (!value.listener) {
                     logger.warning(`No active connection detected but incoming audio is being pushed.`);
                 }
-            } else if (message.type === 'utf8') {
-                if (message.utf8Data) {
-                    try {
-                        const data = JSON.parse(message.utf8Data);
+            } else if (message.type === 'utf8' && message.utf8Data) {
+                try {
+                    const data = JSON.parse(message.utf8Data);
 
-                        const {type, config: { apiMode } = {} } = data;
+                    const {type, config: {mode: apiMode, speechRecognition: {sampleRateHertz} = {}} = {}} = data;
 
-                        if (!mode && !apiMode) {
-                            logger.debug(`'mode' must be provided in the payload inside 'config' or as a query param and must take one of the values from [listener, speaker]`);
-                            connection.send(getError(null, `'mode' must be provided in the payload inside 'config' or as a query param and must take one of the values from [listener, speaker]`));
+                    logger.notice(`[${connectionId}] Request Payload`, {data});
 
-                            return;
-                        } else {
-                            this.getConnection(connectionId, connectionRefId).mode = mode || apiMode;
-                        }
+                    if (type) {
+                        if (type.toLowerCase() === 'start_request' || type.toLowerCase() === 'stop_request' || type.toLowerCase() === 'stop_recognition') {
+                            if (type.toLowerCase() === 'start_request' && !mode && !apiMode) {
+                                logger.error(`'mode' must be provided in the payload inside 'config' or as a query param and must take one of the values from [listener, speaker]`);
+                                connection.send(getError(null, `'mode' must be provided in the payload inside 'config' or as a query param and must take one of the values from [listener, speaker]`));
 
-                        if (type) {
-                            if (type.toLowerCase() === 'start_request' || type.toLowerCase() === 'stop_request' || type.toLowerCase() === 'stop_recognition') {
-                                const value = this.getConnection(connectionId, connectionRefId);
-                                if (value && value.symblConnection) {
-                                    if (type.toLowerCase() === 'start_request') {
-                                        let response;
-                                        if ((!!mode && mode === 'speaker') || (!!apiMode && apiMode === 'speaker')) {
-                                            this.activeConnections[connectionId].connections[connectionRefId].speaker = await value.symblConnection.connect(data);
-                                            response = JSON.stringify({
-                                                type: 'message',
-                                                message: { type: 'recognition_started' }
-                                            });
+                                return;
+                            } else if (!this.getConnection(connectionId, connectionRefId).mode) {
+                                this.getConnection(connectionId, connectionRefId).mode = mode || apiMode;
+                            }
+
+                            const value = this.getConnection(connectionId, connectionRefId);
+                            if (value) {
+                                if (type.toLowerCase() === 'start_request') {
+                                    let response;
+                                    if ((!!mode && mode === 'speaker') || (!!apiMode && apiMode === 'speaker')) {
+                                        if (!sampleRateHertz) {
+                                            connection.send(getError(null, `sampleRateHertz must be provided for mode 'speaker'.`));
+                                        } else if (typeof sampleRateHertz !== 'number') {
+                                            connection.send(getError(null, `sampleRateHertz must be a valid number.`));
                                         } else {
-                                            this.activeConnections[connectionId].connections[connectionRefId].listener = true;
+                                            const { conversationId, speaker } = await value.symblConnection.connect(data);
+
+                                            this.activeConnections[connectionId].connections[connectionRefId].speaker = speaker;
+                                            this.activeConnections[connectionId].conversationId = conversationId;
+
                                             response = JSON.stringify({
                                                 type: 'message',
-                                                message: { type: 'listening_started' }
+                                                message: {
+                                                    type: 'recognition_started',
+                                                    data: {
+                                                        conversationId
+                                                    }
+                                                }
                                             });
                                         }
+                                    } else {
+                                        this.activeConnections[connectionId].connections[connectionRefId].listener = true;
+                                        delete this.activeConnections[connectionId].connections[connectionRefId].symblConnection;
 
-                                        value.appConnection && value.appConnection.send(response);
-                                    } else if (value.toLowerCase() === 'stop_request') {
-                                        if (!!value.symblConnection) {
-                                            const conversationData = await value.symblConnection.disconnect(connectionId);
-                                            value.appConnection && value.appConnection.send(JSON.stringify(conversationData));
-                                        }
+                                        response = JSON.stringify({
+                                            type: 'message',
+                                            message: {
+                                                type: 'recognition_started',
+                                                data: {
+                                                    conversationId: this.activeConnections[connectionId].conversationId
+                                                }
+                                            }
+                                        });
+                                    }
 
+                                    value.appConnection && response && value.appConnection.sendUTF(response);
+                                } else if (type.toLowerCase() === 'stop_request') {
+                                    if (this.getConnection(connectionId, connectionRefId).mode === 'speaker') {
+                                        const conversationData = await value.symblConnection.disconnect(connectionId);
+                                        if (conversationData)
+                                            value.appConnection && value.appConnection.sendUTF(JSON.stringify(conversationData));
+                                    } else {
+                                        value.appConnection && value.appConnection.sendUTF(JSON.stringify({
+                                            type: 'message',
+                                            message: {
+                                                type: 'conversation_completed',
+                                                data: {
+                                                    conversationId: this.activeConnections[connectionId].conversationId
+                                                }
+                                            }
+                                        }));
+                                    }
+
+                                    setImmediate(() => {
                                         value.appConnection && value.appConnection.close();
 
                                         this.removeConnection(connectionId, connectionRefId);
-                                    }
-                                } else {
-                                    logger.warning(`No active connection detected for pushing requests`);
+                                    });
                                 }
                             } else {
-                                logger.debug('Unsupported \'type\' detected: ', {
-                                    type
-                                });
-                                connection.send(JSON.stringify(getError(null, 'Unsupported \'type\' detected: ' + type)));
+                                logger.warning(`No active connection detected for pushing requests`);
                             }
                         } else {
-                            logger.debug('\'type\' must be provided in the payload.');
-                            connection.send(getError(null, '\'type\' must be provided in the payload.'));
+                            logger.debug('Unsupported \'type\' detected: ', {
+                                type
+                            });
+                            connection.send(getError(null, 'Unsupported \'type\' detected: ' + type));
                         }
-
-                    } catch (e) {
-                        logger.error('Error while establishing connection with Symbl Backend' + e.toString());
-                        connection.send(getError(e, 'Error while establishing connection with backend'));
+                    } else {
+                        logger.debug('\'type\' must be provided in the payload.');
+                        connection.send(getError(null, '\'type\' must be provided in the payload.'));
                     }
+
+                } catch (e) {
+                    logger.error('Error while establishing connection with Symbl Backend: ' + e.message, {e});
+                    connection.send(getError(e, 'Error while establishing connection with backend'));
                 }
             }
         };
@@ -239,11 +268,14 @@ const RealTimeConnectionsHelper = class {
     async closeAppConnection(connectionId, connectionRefId) {
         const connectionRef = this.getConnection(connectionId, connectionRefId);
         if (connectionRef && Object.keys(connectionRef).length > 0) {
+            logger.debug(`Attempting to stop processing for this connection.`);
+
+            await connectionRef.appConnection && connectionRef.appConnection.close();
+            await connectionRef.symblConnection && connectionRef.symblConnection.disconnect();
+
             logger.debug('WebSocket connection closed.', {
                 connectionId: connectionId
             });
-            logger.debug(`Attempting to stop processing for this connection.`);
-            await connectionRef.symblConnection && connectionRef.symblConnection.disconnect();
 
             this.removeConnection(connectionId, connectionRefId);
         } else {
@@ -258,9 +290,11 @@ const RealTimeConnectionsHelper = class {
     }
 
     getOnError(connectionId, connectionRefId) {
-        return async () => {
+        return async (code, message) => {
             logger.error('Error occurred in the webSocket connection. Stopping the request for connection: ', {
-                connectionId
+                connectionId,
+                code,
+                message
             });
             const connectionRef = this.getConnection(connectionId, connectionRefId);
             await connectionRef && connectionRef.symblConnection && connectionRef.symblConnection.disconnect();
