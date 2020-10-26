@@ -1,6 +1,6 @@
 {
-  "name": "hackthon-server",
-  "version": "0.0.0",
+  "name": "websocket-api-broadcast-server",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "start": "node app.js"
