@@ -150,6 +150,39 @@ const RealTimeConnectionsHelper = class {
         }
     }
 
+    getMembersForConnectionId(connectionId) {
+        const members = {
+            listeners: 0,
+            speakers: 0,
+        };
+
+        if (this.activeConnections[connectionId] && this.activeConnections[connectionId].connections) {
+            Object.values(this.activeConnections[connectionId].connections).forEach(connection => {
+                if (connection.speaker) {
+                    members.speakers += 1;
+                } else {
+                    members.listeners += 1;
+                }
+            });
+        }
+
+        return {
+            type: 'member_response',
+            members
+        };
+    }
+
+    sendMembersData(connectionId) {
+        const connections = this.getConnection(connectionId);
+        const membersData = this.getMembersForConnectionId(connectionId);
+
+        if (connections) {
+            this.sendDataOnConnections(connectionId, membersData);
+        } else {
+            logger.warning(`Connection with connectionId ${connectionId} and connectionRefId: ${connectionRefId} not found`);
+        }
+    }
+
     getOnMessage(connection, connectionId, connectionRefId, options) {
         const {mode} = options;
         return async (message) => {
@@ -220,11 +253,28 @@ const RealTimeConnectionsHelper = class {
                                     }
 
                                     value.appConnection && response && value.appConnection.sendUTF(response);
+                                    this.sendMembersData(connectionId);
                                 } else if (type.toLowerCase() === 'stop_request') {
                                     if (this.getConnection(connectionId, connectionRefId).mode === 'speaker') {
                                         const conversationData = await value.symblConnection.disconnect(connectionId);
                                         if (conversationData)
                                             value.appConnection && value.appConnection.sendUTF(JSON.stringify(conversationData));
+                                    }
+
+                                    if (!!apiMode && apiMode === 'listener') {
+                                        this.activeConnections[connectionId].connections[connectionRefId].listener = true;
+                                        delete this.activeConnections[connectionId].connections[connectionRefId].speaker;
+                                        delete this.activeConnections[connectionId].connections[connectionRefId].symblConnection;
+
+                                        value.appConnection && value.appConnection.sendUTF(JSON.stringify({
+                                            type: 'message',
+                                            message: {
+                                                type: 'recognition_started',
+                                                data: {
+                                                    conversationId: this.activeConnections[connectionId].conversationId
+                                                }
+                                            }
+                                        }));
                                     } else {
                                         value.appConnection && value.appConnection.sendUTF(JSON.stringify({
                                             type: 'message',
@@ -235,13 +285,14 @@ const RealTimeConnectionsHelper = class {
                                                 }
                                             }
                                         }));
+
+                                        setImmediate(() => {
+                                            value.appConnection && value.appConnection.close();
+
+                                            this.removeConnection(connectionId, connectionRefId);
+                                            this.sendMembersData(connectionId);
+                                        });
                                     }
-
-                                    setImmediate(() => {
-                                        value.appConnection && value.appConnection.close();
-
-                                        this.removeConnection(connectionId, connectionRefId);
-                                    });
                                 }
                             } else {
                                 logger.warning(`No active connection detected for pushing requests`);
