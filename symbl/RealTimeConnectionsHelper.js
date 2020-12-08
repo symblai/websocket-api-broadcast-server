@@ -255,6 +255,13 @@ const RealTimeConnectionsHelper = class {
                                     value.appConnection && response && value.appConnection.sendUTF(response);
                                     this.sendMembersData(connectionId);
                                 } else if (type.toLowerCase() === 'stop_request') {
+                                    value.appConnection && value.appConnection.sendUTF(JSON.stringify({
+                                        type: 'message',
+                                        message: {
+                                            type: 'recognition_stopped'
+                                        }
+                                    }));
+
                                     if (this.getConnection(connectionId, connectionRefId).mode === 'speaker') {
                                         const conversationData = await value.symblConnection.disconnect(connectionId);
                                         if (conversationData)
