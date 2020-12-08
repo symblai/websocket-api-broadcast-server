@@ -190,7 +190,7 @@ const RealTimeConnectionsHelper = class {
                 const value = this.getConnection(connectionId, connectionRefId);
                 if (value && value.symblConnection && !value.listener) {
                     await value.symblConnection.sendAudio(message.binaryData);
-                } else if (!value.listener) {
+                } else if (value.listener) {
                     logger.warning(`No active connection detected but incoming audio is being pushed.`);
                 }
             } else if (message.type === 'utf8' && message.utf8Data) {
@@ -208,8 +208,6 @@ const RealTimeConnectionsHelper = class {
                                 connection.send(getError(null, `'mode' must be provided in the payload inside 'config' or as a query param and must take one of the values from [listener, speaker]`));
 
                                 return;
-                            } else if (!this.getConnection(connectionId, connectionRefId).mode) {
-                                this.getConnection(connectionId, connectionRefId).mode = mode || apiMode;
                             }
 
                             const value = this.getConnection(connectionId, connectionRefId);
@@ -225,6 +223,8 @@ const RealTimeConnectionsHelper = class {
                                             const { conversationId, speaker } = await value.symblConnection.connect(data);
 
                                             this.activeConnections[connectionId].connections[connectionRefId].speaker = speaker;
+                                            this.activeConnections[connectionId].connections[connectionRefId].listener = false;
+
                                             this.activeConnections[connectionId].conversationId = conversationId;
 
                                             response = JSON.stringify({
@@ -270,8 +270,9 @@ const RealTimeConnectionsHelper = class {
 
                                     if (!!apiMode && apiMode === 'listener') {
                                         this.activeConnections[connectionId].connections[connectionRefId].listener = true;
+                                        this.getConnection(connectionId, connectionRefId).mode = 'listener';
+
                                         delete this.activeConnections[connectionId].connections[connectionRefId].speaker;
-                                        delete this.activeConnections[connectionId].connections[connectionRefId].symblConnection;
 
                                         value.appConnection && value.appConnection.sendUTF(JSON.stringify({
                                             type: 'message',
@@ -282,6 +283,8 @@ const RealTimeConnectionsHelper = class {
                                                 }
                                             }
                                         }));
+
+                                        this.sendMembersData(connectionId);
                                     } else {
                                         value.appConnection && value.appConnection.sendUTF(JSON.stringify({
                                             type: 'message',
@@ -301,6 +304,9 @@ const RealTimeConnectionsHelper = class {
                                         });
                                     }
                                 }
+
+                                this.getConnection(connectionId, connectionRefId).mode = mode || apiMode;
+
                             } else {
                                 logger.warning(`No active connection detected for pushing requests`);
                             }
@@ -336,6 +342,8 @@ const RealTimeConnectionsHelper = class {
             });
 
             this.removeConnection(connectionId, connectionRefId);
+
+            this.sendMembersData(connectionId);
         } else {
             logger.warning('No connection reference found with connectionId: ' + connectionId + ' and referenceId: ' + connectionRefId);
         }
