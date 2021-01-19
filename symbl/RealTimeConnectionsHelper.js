@@ -239,7 +239,6 @@ const RealTimeConnectionsHelper = class {
                                         }
                                     } else {
                                         this.activeConnections[connectionId].connections[connectionRefId].listener = true;
-                                        delete this.activeConnections[connectionId].connections[connectionRefId].symblConnection;
 
                                         response = JSON.stringify({
                                             type: 'message',
